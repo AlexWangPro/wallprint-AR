@@ -1,0 +1,6 @@
+{
+  "name": "WallPrint AR",
+  "description": "Simulate printing images on walls using a live camera feed or uploaded photos, with adjustable scale, opacity, and blend modes.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
