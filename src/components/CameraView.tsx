@@ -18,7 +18,7 @@ export function CameraView() {
         }
       } catch (err) {
         console.error('Camera error:', err);
-        setError('无法访问相机，请允许权限或使用图片模式。');
+        setError('Cannot access camera. Please check permissions.');
       }
     }
 

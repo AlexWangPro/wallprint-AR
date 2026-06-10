@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, ChangeEvent } from 'react';
+import { useState, useRef, useEffect, ChangeEvent, TouchEvent } from 'react';
 import { CameraView } from './components/CameraView';
 import { Image as ImageIcon, Lock, Unlock, X } from 'lucide-react';
 
@@ -10,9 +10,9 @@ export default function App() {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   
   const [isAnchored, setIsAnchored] = useState(false);
-  const [orientationOffset, setOrientationOffset] = useState({ x: 0, y: 0 });
   const initialOrientation = useRef<{ alpha: number, beta: number, gamma: number } | null>(null);
 
+  const imageRef = useRef<HTMLImageElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Touch handling refs
@@ -28,7 +28,6 @@ export default function App() {
       setPosition({ x: 0, y: 0 });
       setIsAnchored(false);
       initialOrientation.current = null;
-      setOrientationOffset({ x: 0, y: 0 });
     }
   };
 
@@ -37,7 +36,7 @@ export default function App() {
     setIsAnchored(false);
   };
 
-  const onTouchStart = (e: React.TouchEvent) => {
+  const onTouchStart = (e: TouchEvent) => {
     if (e.touches.length === 1 && !isAnchored) {
       lastPanRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     } else if (e.touches.length === 2) {
@@ -49,7 +48,7 @@ export default function App() {
     }
   };
 
-  const onTouchMove = (e: React.TouchEvent) => {
+  const onTouchMove = (e: TouchEvent) => {
     if (e.touches.length === 1 && !isAnchored && lastPanRef.current) {
       const dx = e.touches[0].clientX - lastPanRef.current.x;
       const dy = e.touches[0].clientY - lastPanRef.current.y;
@@ -66,12 +65,11 @@ export default function App() {
     }
   };
 
-  const onTouchEnd = (e: React.TouchEvent) => {
+  const onTouchEnd = (e: TouchEvent) => {
     if (e.touches.length === 0) {
       lastPanRef.current = null;
       lastPinchRef.current = null;
     } else if (e.touches.length === 1) {
-      // If one finger remains after pinch, treat it as a new pan start
       lastPanRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       lastPinchRef.current = null;
     }
@@ -81,7 +79,6 @@ export default function App() {
     if (isAnchored) {
       setIsAnchored(false);
       initialOrientation.current = null;
-      setOrientationOffset({ x: 0, y: 0 });
       return;
     }
 
@@ -91,7 +88,7 @@ export default function App() {
         if (permission === 'granted') {
           setIsAnchored(true);
         } else {
-          alert('需要传感器权限来固定图片');
+          alert('Device sensor permission is required to lock the image.');
         }
       } catch (e) {
         setIsAnchored(true);
@@ -104,8 +101,14 @@ export default function App() {
   useEffect(() => {
     if (!isAnchored) return;
 
+    let targetX = 0;
+    let targetY = 0;
+    let currentX = 0;
+    let currentY = 0;
+    let animationFrameId: number;
+
     const handleOrientation = (e: DeviceOrientationEvent) => {
-      if (!e.alpha || !e.beta) return; // Might be null on some devices
+      if (e.alpha === null || e.beta === null) return;
 
       if (!initialOrientation.current) {
         initialOrientation.current = { alpha: e.alpha, beta: e.beta, gamma: e.gamma || 0 };
@@ -114,40 +117,42 @@ export default function App() {
 
       let dAlpha = e.alpha - initialOrientation.current.alpha;
       let dBeta = e.beta - initialOrientation.current.beta;
-      let dGamma = (e.gamma || 0) - initialOrientation.current.gamma;
 
-      // Wrap around 360
+      // Handle 360 degree wrapping for alpha
       if (dAlpha > 180) dAlpha -= 360;
       if (dAlpha < -180) dAlpha += 360;
 
-      // Basic linear mapping for 3DOF. 
-      // This varies heavily by FOV and device, but works well enough as a simple simulation.
-      const pxPerDegreeX = window.innerWidth / 60;
+      // Map degrees to pixels based on estimated field of view
+      const pxPerDegreeX = window.innerWidth / 45; 
       const pxPerDegreeY = window.innerHeight / 60;
 
-      const isLandscape = window.innerWidth > window.innerHeight;
-
-      let transX = 0;
-      let transY = 0;
-
-      if (isLandscape) {
-        // Landscape holding
-        transX = dAlpha * pxPerDegreeX;
-        transY = -dBeta * pxPerDegreeY;
-      } else {
-        // Portrait holding
-        // In portrait, rotating left/right is alpha. 
-        // Tilting up/down is beta.
-        transX = dAlpha * pxPerDegreeX;
-        transY = -dBeta * pxPerDegreeY;
-      }
-
-      setOrientationOffset({ x: -transX, y: transY });
+      targetX = -dAlpha * pxPerDegreeX;
+      targetY = dBeta * pxPerDegreeY;
     };
 
     window.addEventListener('deviceorientation', handleOrientation);
-    return () => window.removeEventListener('deviceorientation', handleOrientation);
-  }, [isAnchored]);
+
+    // Render loop for smooth lerping
+    const updateTransform = () => {
+      currentX += (targetX - currentX) * 0.15; // smooth damping
+      currentY += (targetY - currentY) * 0.15;
+
+      if (imageRef.current) {
+        imageRef.current.style.transform = `translate3d(${position.x + currentX}px, ${position.y + currentY}px, 0) scale(${scale})`;
+      }
+      animationFrameId = requestAnimationFrame(updateTransform);
+    };
+
+    updateTransform();
+
+    return () => {
+      window.removeEventListener('deviceorientation', handleOrientation);
+      cancelAnimationFrame(animationFrameId);
+      if (imageRef.current) {
+        imageRef.current.style.transform = `translate3d(${position.x}px, ${position.y}px, 0) scale(${scale})`;
+      }
+    };
+  }, [isAnchored, position.x, position.y, scale]);
 
   return (
     <div 
@@ -166,11 +171,12 @@ export default function App() {
       {printImage && (
         <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center">
           <img
+            ref={imageRef}
             src={printImage}
             draggable={false}
             className="w-auto h-auto max-w-[80vw] max-h-[80vh] object-contain drop-shadow-2xl"
             style={{
-              transform: `translate3d(${position.x + orientationOffset.x}px, ${position.y + orientationOffset.y}px, 0) scale(${scale})`,
+              transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${scale})`,
               opacity: opacity,
             }}
           />
@@ -195,7 +201,7 @@ export default function App() {
         {/* Right side slider for opacity */}
         {printImage && (
           <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col items-center gap-3">
-             <span className="text-white/80 text-xs font-medium tracking-wider drop-shadow-md">透明度</span>
+             <span className="text-white/80 text-xs font-medium tracking-wider drop-shadow-md">OPACITY</span>
              <div className="h-48 flex items-center justify-center pointer-events-auto">
                 <input
                   type="range"
@@ -223,7 +229,7 @@ export default function App() {
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-3 bg-white/10 backdrop-blur-xl border border-white/30 text-white px-8 py-4 rounded-full font-medium text-lg shadow-2xl active:bg-white/20 transition-all hover:scale-105"
             >
-              <ImageIcon className="w-6 h-6" /> 选择图片
+              <ImageIcon className="w-6 h-6" /> Select Image
             </button>
           ) : (
             <button
@@ -235,7 +241,7 @@ export default function App() {
               }`}
             >
               {isAnchored ? <Unlock className="w-6 h-6" /> : <Lock className="w-6 h-6" />}
-              {isAnchored ? '解除固定' : '放置在墙面'}
+              {isAnchored ? 'Unlock' : 'Lock to Wall'}
             </button>
           )}
 
